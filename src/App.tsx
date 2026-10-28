@@ -1,4 +1,6 @@
-import { ChangeEvent, useMemo, useState } from 'react';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import { ChangeEvent, useMemo, useRef, useState } from 'react';
 
 type Clip = {
   id: string;
@@ -40,6 +42,21 @@ const formatSeconds = (value: number) => {
   return `${mins}:${secs}`;
 };
 
+const sanitizeFileName = (name: string) =>
+  name.replace(/[^a-zA-Z0-9_.-]/g, '_').replace(/_+/g, '_');
+
+const ensureFFmpeg = async () => {
+  const ffmpeg = new FFmpeg();
+  const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
+
+  await ffmpeg.load({
+    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+  });
+
+  return ffmpeg;
+};
+
 export default function App() {
   const [clips, setClips] = useState<Clip[]>([]);
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
@@ -51,6 +68,9 @@ export default function App() {
   const [overlays, setOverlays] = useState<Overlay[]>([
     { id: crypto.randomUUID(), text: 'Memories', x: 30, y: 70 },
   ]);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState('');
+  const ffmpegRef = useRef<FFmpeg | null>(null);
 
   const activeClip = useMemo(
     () => clips.find((clip) => clip.id === activeClipId) ?? clips[0] ?? null,
@@ -172,31 +192,130 @@ export default function App() {
     setOverlays((current) => [...current, nextOverlay]);
   };
 
-  const exportProject = () => {
-    const projectData = {
-      title: projectTitle,
-      filter: filterName,
-      audioTrack: audioTrack ? { id: audioTrack.id, name: audioTrack.name } : null,
-      clips: clips.map(({ id, name, duration, trimStart, trimEnd }) => ({
-        id,
-        name,
-        duration,
-        trimStart,
-        trimEnd,
-      })),
-      overlays,
-      exportedAt: new Date().toISOString(),
-    };
+  const exportProject = async () => {
+    if (clips.length === 0) {
+      setExportMessage('Add at least one clip before exporting.');
+      return;
+    }
 
-    const blob = new Blob([JSON.stringify(projectData, null, 2)], {
-      type: 'application/json',
-    });
+    try {
+      setIsExporting(true);
+      setExportMessage('Preparing FFmpeg export...');
 
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `${projectTitle.replace(/\s+/g, '-').toLowerCase()}.json`;
-    link.click();
-    URL.revokeObjectURL(link.href);
+      const ffmpeg = ffmpegRef.current ?? (await ensureFFmpeg());
+      ffmpegRef.current = ffmpeg;
+
+      const clipInputs = await Promise.all(
+        clips.map(async (clip, index) => {
+          const safeName = `clip_${index}_${sanitizeFileName(clip.name)}.mp4`;
+          const input = await fetchFile(clip.url);
+          await ffmpeg.writeFile(safeName, input);
+          return safeName;
+        })
+      );
+
+      const finalName = `output_${Date.now()}.mp4`;
+
+      if (audioTrack) {
+        const safeAudio = `audio_${sanitizeFileName(audioTrack.name)}`;
+        const audioBuffer = await fetchFile(audioTrack.url);
+        await ffmpeg.writeFile(safeAudio, audioBuffer);
+
+        if (clipInputs.length === 1) {
+          await ffmpeg.exec([
+            '-i',
+            clipInputs[0],
+            '-i',
+            safeAudio,
+            '-map',
+            '0:v:0',
+            '-map',
+            '1:a:0',
+            '-c:v',
+            'libx264',
+            '-preset',
+            'ultrafast',
+            '-pix_fmt',
+            'yuv420p',
+            '-shortest',
+            finalName,
+          ]);
+        } else {
+          const concatFile = 'concat_list.txt';
+          const concatContent = clipInputs.map((name) => `file '${name}'`).join('\n');
+          await ffmpeg.writeFile(concatFile, new TextEncoder().encode(concatContent));
+          await ffmpeg.exec([
+            '-safe',
+            '0',
+            '-f',
+            'concat',
+            '-i',
+            concatFile,
+            '-i',
+            safeAudio,
+            '-map',
+            '0:v:0',
+            '-map',
+            '1:a:0',
+            '-c:v',
+            'libx264',
+            '-preset',
+            'ultrafast',
+            '-pix_fmt',
+            'yuv420p',
+            '-shortest',
+            finalName,
+          ]);
+        }
+      } else if (clipInputs.length === 1) {
+        await ffmpeg.exec([
+          '-i',
+          clipInputs[0],
+          '-c:v',
+          'libx264',
+          '-preset',
+          'ultrafast',
+          '-pix_fmt',
+          'yuv420p',
+          finalName,
+        ]);
+      } else {
+        const concatFile = 'concat_list.txt';
+        const concatContent = clipInputs.map((name) => `file '${name}'`).join('\n');
+        await ffmpeg.writeFile(concatFile, new TextEncoder().encode(concatContent));
+        await ffmpeg.exec([
+          '-safe',
+          '0',
+          '-f',
+          'concat',
+          '-i',
+          concatFile,
+          '-c:v',
+          'libx264',
+          '-preset',
+          'ultrafast',
+          '-pix_fmt',
+          'yuv420p',
+          finalName,
+        ]);
+      }
+
+      const outputData = await ffmpeg.readFile(finalName);
+      const blob = new Blob([outputData as Uint8Array], { type: 'video/mp4' });
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = `${projectTitle.replace(/\s+/g, '-').toLowerCase() || 'clipflow-export'}.mp4`;
+      link.click();
+      URL.revokeObjectURL(href);
+
+      setExportMessage('Export finished. MP4 downloaded.');
+    } catch (error) {
+      console.error(error);
+      setExportMessage('Export failed. Try fewer clips or smaller files.');
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   return (
@@ -243,7 +362,7 @@ export default function App() {
         <div className="panel">
           <h3>Filters</h3>
           <div className="chip-row">
-            {Object.entries(filterPresets).map(([key, value]) => (
+            {Object.entries(filterPresets).map(([key]) => (
               <button
                 key={key}
                 className={filterName === key ? 'chip active' : 'chip'}
@@ -273,8 +392,8 @@ export default function App() {
             <p className="eyebrow">Editor</p>
             <h2>{projectTitle}</h2>
           </div>
-          <button className="primary-button" onClick={exportProject}>
-            Export project
+          <button className="primary-button" onClick={exportProject} disabled={isExporting}>
+            {isExporting ? 'Exporting...' : 'Export project'}
           </button>
         </header>
 
@@ -396,6 +515,12 @@ export default function App() {
             </div>
           </div>
         </section>
+
+        {exportMessage && (
+          <div className="export-status">
+            {exportMessage}
+          </div>
+        )}
       </main>
     </div>
   );

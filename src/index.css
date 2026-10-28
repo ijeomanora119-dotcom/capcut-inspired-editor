@@ -33,6 +33,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 300px 1fr;
@@ -287,6 +292,15 @@ video {
   place-items: center;
   min-height: 300px;
   color: #a9bdd8;
+}
+
+.export-status {
+  margin-top: 16px;
+  padding: 10px 14px;
+  background: rgba(14, 116, 144, 0.15);
+  border: 1px solid rgba(125, 211, 252, 0.4);
+  border-radius: 12px;
+  color: #dff9ff;
 }
 
 @media (max-width: 960px) {
