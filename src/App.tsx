@@ -1,4 +1,4 @@
-import { ChangeEvent, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, useMemo, useState } from 'react';
 
 type Clip = {
   id: string;
@@ -14,6 +14,12 @@ type Overlay = {
   text: string;
   x: number;
   y: number;
+};
+
+type AudioTrack = {
+  id: string;
+  name: string;
+  url: string;
 };
 
 const filterPresets = {
@@ -40,10 +46,11 @@ export default function App() {
   const [projectTitle, setProjectTitle] = useState('Summer Reels V1');
   const [filterName, setFilterName] = useState<keyof typeof filterPresets>('none');
   const [textInput, setTextInput] = useState('Your slogan here');
+  const [audioTrack, setAudioTrack] = useState<AudioTrack | null>(null);
+  const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
   const [overlays, setOverlays] = useState<Overlay[]>([
-    { id: crypto.randomUUID(), text: 'Memories', x: 32, y: 68 },
+    { id: crypto.randomUUID(), text: 'Memories', x: 30, y: 70 },
   ]);
-  const previewRef = useRef<HTMLVideoElement | null>(null);
 
   const activeClip = useMemo(
     () => clips.find((clip) => clip.id === activeClipId) ?? clips[0] ?? null,
@@ -74,11 +81,11 @@ export default function App() {
 
         return {
           id: crypto.randomUUID(),
-          name: file.name,
+          name: file.name.replace(/\.[^/.]+$/, ''),
           url,
           duration,
           trimStart: 0,
-          trimEnd: duration || 100,
+          trimEnd: duration || 10,
         } satisfies Clip;
       })
     );
@@ -89,6 +96,35 @@ export default function App() {
     }
 
     event.target.value = '';
+  };
+
+  const handleAudioUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setAudioTrack({
+      id: crypto.randomUUID(),
+      name: file.name,
+      url: URL.createObjectURL(file),
+    });
+
+    event.target.value = '';
+  };
+
+  const reorderClips = (fromId: string, toId: string) => {
+    if (fromId === toId) return;
+
+    setClips((currentClips) => {
+      const fromIndex = currentClips.findIndex((clip) => clip.id === fromId);
+      const toIndex = currentClips.findIndex((clip) => clip.id === toId);
+
+      if (fromIndex === -1 || toIndex === -1) return currentClips;
+
+      const updated = [...currentClips];
+      const [movedClip] = updated.splice(fromIndex, 1);
+      updated.splice(toIndex, 0, movedClip);
+      return updated;
+    });
   };
 
   const splitCurrentClip = () => {
@@ -130,8 +166,8 @@ export default function App() {
     const nextOverlay: Overlay = {
       id: crypto.randomUUID(),
       text: textInput.trim() || 'Free edit',
-      x: 18 + Math.random() * 40,
-      y: 18 + Math.random() * 50,
+      x: 18 + Math.random() * 38,
+      y: 20 + Math.random() * 50,
     };
     setOverlays((current) => [...current, nextOverlay]);
   };
@@ -140,6 +176,7 @@ export default function App() {
     const projectData = {
       title: projectTitle,
       filter: filterName,
+      audioTrack: audioTrack ? { id: audioTrack.id, name: audioTrack.name } : null,
       clips: clips.map(({ id, name, duration, trimStart, trimEnd }) => ({
         id,
         name,
@@ -190,6 +227,20 @@ export default function App() {
         </div>
 
         <div className="panel">
+          <h3>Audio</h3>
+          <label className="upload-button">
+            Add music track
+            <input type="file" accept="audio/*" onChange={handleAudioUpload} />
+          </label>
+          {audioTrack && (
+            <div className="audio-box">
+              <span>{audioTrack.name}</span>
+              <audio controls src={audioTrack.url} />
+            </div>
+          )}
+        </div>
+
+        <div className="panel">
           <h3>Filters</h3>
           <div className="chip-row">
             {Object.entries(filterPresets).map(([key, value]) => (
@@ -234,15 +285,16 @@ export default function App() {
                 <strong>{activeClip.name}</strong>
                 <span>{formatSeconds(activeClip.duration)}</span>
               </div>
+
               <div className="video-wrap">
                 <video
-                  ref={previewRef}
                   key={activeClip.id}
                   src={activeClip.url}
                   controls
                   style={{ filter: filterPresets[filterName] }}
                 />
               </div>
+
               <div className="overlay-layer">
                 {overlays.map((overlay) => (
                   <div
@@ -282,6 +334,7 @@ export default function App() {
                     }
                   />
                 </label>
+
                 <label>
                   End {formatSeconds(activeClip.trimEnd)}
                   <input
@@ -297,6 +350,7 @@ export default function App() {
                     }
                   />
                 </label>
+
                 <button className="secondary-button" onClick={splitCurrentClip}>
                   Split clip
                 </button>
@@ -315,10 +369,27 @@ export default function App() {
                     key={clip.id}
                     className={clip.id === activeClip?.id ? 'timeline-item active' : 'timeline-item'}
                     onClick={() => setActiveClipId(clip.id)}
-                    style={{ width: `${Math.max((clip.trimEnd - clip.trimStart) / Math.max(clip.duration, 1) * 100, 18)}%` }}
+                    draggable
+                    onDragStart={() => setDraggedClipId(clip.id)}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={() => {
+                      if (draggedClipId) {
+                        reorderClips(draggedClipId, clip.id);
+                        setDraggedClipId(null);
+                      }
+                    }}
+                    onDragEnd={() => setDraggedClipId(null)}
+                    style={{
+                      width: `${Math.max(
+                        ((clip.trimEnd - clip.trimStart) / Math.max(clip.duration, 1)) * 100,
+                        18
+                      )}%`,
+                    }}
                   >
                     <span>{clip.name}</span>
-                    <small>{formatSeconds(clip.trimStart)} → {formatSeconds(clip.trimEnd)}</small>
+                    <small>
+                      {formatSeconds(clip.trimStart)} → {formatSeconds(clip.trimEnd)}
+                    </small>
                   </button>
                 ))
               )}

@@ -96,24 +96,22 @@ h1 {
   font-size: 0.9rem;
 }
 
-input[type='text'],
 input[type='file'],
 input[type='range'],
 input {
   width: 100%;
 }
 
-input[type='text'],
-input[type='range'] {
-  margin-top: 6px;
-}
-
-input[type='text'] {
+input {
   border: 1px solid rgba(148, 163, 184, 0.25);
   background: rgba(15, 23, 42, 0.8);
   color: #eef5ff;
   border-radius: 10px;
   padding: 10px 12px;
+}
+
+input[type='file'] {
+  display: none;
 }
 
 .upload-button {
@@ -127,13 +125,23 @@ input[type='text'] {
   background: rgba(6, 182, 212, 0.1);
   position: relative;
   overflow: hidden;
+  width: 100%;
 }
 
-.upload-button input {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
+.audio-box {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.audio-box span {
+  color: #dfeafc;
+  font-size: 0.86rem;
+}
+
+.audio-box audio {
+  width: 100%;
 }
 
 .chip-row {
@@ -222,8 +230,8 @@ video {
 
 .overlay-layer {
   position: relative;
+  min-height: 60px;
   margin-top: 10px;
-  height: 0;
 }
 
 .text-overlay {
