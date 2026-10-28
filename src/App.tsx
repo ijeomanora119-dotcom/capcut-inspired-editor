@@ -11,6 +11,7 @@ type Clip = {
   trimEnd: number;
   transition: TransitionStyle;
   volume: number;
+  speed: number;
 };
 
 type Overlay = {
@@ -76,6 +77,29 @@ const ensureFFmpeg = async () => {
   return ffmpeg;
 };
 
+const buildAutoCaptions = (source: string) => {
+  const chunks = source
+    .trim()
+    .split(/\s+/)
+    .reduce<string[]>((acc, word) => {
+      const last = acc[acc.length - 1] ?? '';
+      if ((last + ' ' + word).trim().length <= 30) {
+        acc[acc.length - 1] = (last + ' ' + word).trim();
+      } else {
+        acc.push(word);
+      }
+      return acc;
+    }, [])
+    .filter(Boolean);
+
+  return chunks.slice(0, 6).map((text, index) => ({
+    id: `${index}-${crypto.randomUUID()}`,
+    text,
+    x: 50,
+    y: 82 + (index % 2) * 6,
+  }));
+};
+
 export default function App() {
   const [clips, setClips] = useState<Clip[]>([]);
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
@@ -87,7 +111,7 @@ export default function App() {
   const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState('');
-  const [captionText, setCaptionText] = useState('Your subtitle here');
+  const [captionText, setCaptionText] = useState('Our free editing journey begins here');
   const [captions, setCaptions] = useState<Caption[]>([
     { id: crypto.randomUUID(), text: 'Summer nights', x: 50, y: 84 },
   ]);
@@ -105,8 +129,9 @@ export default function App() {
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.volume = (activeClip?.volume ?? 80) / 100;
+      videoRef.current.playbackRate = activeClip?.speed ?? 1;
     }
-  }, [activeClip]);
+  }, [activeClip, activeClip?.speed, activeClip?.volume]);
 
   const updateActiveClip = (changes: Partial<Clip>) => {
     if (!activeClip) return;
@@ -139,6 +164,7 @@ export default function App() {
           trimEnd: duration || 10,
           transition: 'fade' as TransitionStyle,
           volume: 80,
+          speed: 1,
         } satisfies Clip;
       })
     );
@@ -233,6 +259,11 @@ export default function App() {
       y: 82,
     };
     setCaptions((current) => [...current, nextCaption]);
+  };
+
+  const generateAutoCaptions = () => {
+    const nextCaptions = buildAutoCaptions(captionText);
+    setCaptions((current) => [...current, ...nextCaptions]);
   };
 
   const exportProject = async () => {
@@ -361,7 +392,7 @@ export default function App() {
                 value={audioVolume}
                 onChange={(event) => setAudioVolume(Number(event.target.value))}
               />
-              <audio controls src={audioTrack.url} volume={audioVolume / 100} />
+              <audio controls src={audioTrack.url} />
             </div>
           )}
         </div>
@@ -532,7 +563,7 @@ export default function App() {
 
         {activeClip && (
           <section className="panel extra-panel">
-            <h3>Transitions & audio</h3>
+            <h3>Transitions & speed</h3>
             <div className="stacked-controls">
               <div>
                 <label>Transition</label>
@@ -559,18 +590,31 @@ export default function App() {
                   onChange={(event) => updateActiveClip({ volume: Number(event.target.value) })}
                 />
               </div>
+
+              <div>
+                <label>Playback speed: {activeClip.speed.toFixed(1)}x</label>
+                <input
+                  type="range"
+                  min={0.25}
+                  max={2}
+                  step={0.25}
+                  value={activeClip.speed}
+                  onChange={(event) => updateActiveClip({ speed: Number(event.target.value) })}
+                />
+              </div>
             </div>
           </section>
         )}
 
         <section className="panel extra-panel">
-          <h3>Captions</h3>
+          <h3>Auto captions</h3>
           <div className="caption-tools">
             <input
               value={captionText}
               onChange={(event) => setCaptionText(event.target.value)}
             />
             <button className="primary-button" onClick={addCaption}>Add caption</button>
+            <button className="secondary-button" onClick={generateAutoCaptions}>Generate auto captions</button>
           </div>
         </section>
 
