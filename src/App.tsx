@@ -1,6 +1,6 @@
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile, toBlobURL } from '@ffmpeg/util';
-import { ChangeEvent, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
+
+type TransitionStyle = 'none' | 'fade' | 'slide' | 'zoom' | 'dissolve';
 
 type Clip = {
   id: string;
@@ -9,6 +9,8 @@ type Clip = {
   duration: number;
   trimStart: number;
   trimEnd: number;
+  transition: TransitionStyle;
+  volume: number;
 };
 
 type Overlay = {
@@ -24,12 +26,27 @@ type AudioTrack = {
   url: string;
 };
 
+type Caption = {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+};
+
 const filterPresets = {
   none: 'none',
   warm: 'sepia(0.35) saturate(1.25) contrast(1.1)',
   cinematic: 'contrast(1.2) saturate(1.55) hue-rotate(-8deg)',
   vintage: 'sepia(0.7) saturate(0.8) brightness(1.08)',
 };
+
+const transitionOptions: { label: string; value: TransitionStyle }[] = [
+  { label: 'None', value: 'none' },
+  { label: 'Fade', value: 'fade' },
+  { label: 'Slide', value: 'slide' },
+  { label: 'Zoom', value: 'zoom' },
+  { label: 'Dissolve', value: 'dissolve' },
+];
 
 const formatSeconds = (value: number) => {
   if (!Number.isFinite(value)) return '00:00';
@@ -46,12 +63,14 @@ const sanitizeFileName = (name: string) =>
   name.replace(/[^a-zA-Z0-9_.-]/g, '_').replace(/_+/g, '_');
 
 const ensureFFmpeg = async () => {
+  const { FFmpeg } = await import('@ffmpeg/ffmpeg');
+  const util = await import('@ffmpeg/util');
   const ffmpeg = new FFmpeg();
   const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
 
   await ffmpeg.load({
-    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+    coreURL: await util.toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await util.toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
   });
 
   return ffmpeg;
@@ -64,18 +83,30 @@ export default function App() {
   const [filterName, setFilterName] = useState<keyof typeof filterPresets>('none');
   const [textInput, setTextInput] = useState('Your slogan here');
   const [audioTrack, setAudioTrack] = useState<AudioTrack | null>(null);
+  const [audioVolume, setAudioVolume] = useState(70);
   const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState('');
+  const [captionText, setCaptionText] = useState('Your subtitle here');
+  const [captions, setCaptions] = useState<Caption[]>([
+    { id: crypto.randomUUID(), text: 'Summer nights', x: 50, y: 84 },
+  ]);
   const [overlays, setOverlays] = useState<Overlay[]>([
     { id: crypto.randomUUID(), text: 'Memories', x: 30, y: 70 },
   ]);
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportMessage, setExportMessage] = useState('');
-  const ffmpegRef = useRef<FFmpeg | null>(null);
+  const ffmpegRef = useRef<any>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const activeClip = useMemo(
     () => clips.find((clip) => clip.id === activeClipId) ?? clips[0] ?? null,
     [activeClipId, clips]
   );
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.volume = (activeClip?.volume ?? 80) / 100;
+    }
+  }, [activeClip]);
 
   const updateActiveClip = (changes: Partial<Clip>) => {
     if (!activeClip) return;
@@ -106,6 +137,8 @@ export default function App() {
           duration,
           trimStart: 0,
           trimEnd: duration || 10,
+          transition: 'fade' as TransitionStyle,
+          volume: 80,
         } satisfies Clip;
       })
     );
@@ -192,6 +225,16 @@ export default function App() {
     setOverlays((current) => [...current, nextOverlay]);
   };
 
+  const addCaption = () => {
+    const nextCaption: Caption = {
+      id: crypto.randomUUID(),
+      text: captionText.trim() || 'Auto caption',
+      x: 50,
+      y: 82,
+    };
+    setCaptions((current) => [...current, nextCaption]);
+  };
+
   const exportProject = async () => {
     if (clips.length === 0) {
       setExportMessage('Add at least one clip before exporting.');
@@ -208,8 +251,8 @@ export default function App() {
       const clipInputs = await Promise.all(
         clips.map(async (clip, index) => {
           const safeName = `clip_${index}_${sanitizeFileName(clip.name)}.mp4`;
-          const input = await fetchFile(clip.url);
-          await ffmpeg.writeFile(safeName, input);
+          const input = await fetch(clip.url).then((res) => res.arrayBuffer());
+          await ffmpeg.writeFile(safeName, new Uint8Array(input));
           return safeName;
         })
       );
@@ -217,66 +260,33 @@ export default function App() {
       const finalName = `output_${Date.now()}.mp4`;
 
       if (audioTrack) {
-        const safeAudio = `audio_${sanitizeFileName(audioTrack.name)}`;
-        const audioBuffer = await fetchFile(audioTrack.url);
-        await ffmpeg.writeFile(safeAudio, audioBuffer);
+        const safeAudioName = `audio_${sanitizeFileName(audioTrack.name)}`;
+        const audioBuffer = await fetch(audioTrack.url).then((res) => res.arrayBuffer());
+        await ffmpeg.writeFile(safeAudioName, new Uint8Array(audioBuffer));
 
         if (clipInputs.length === 1) {
           await ffmpeg.exec([
-            '-i',
-            clipInputs[0],
-            '-i',
-            safeAudio,
-            '-map',
-            '0:v:0',
-            '-map',
-            '1:a:0',
-            '-c:v',
-            'libx264',
-            '-preset',
-            'ultrafast',
-            '-pix_fmt',
-            'yuv420p',
-            '-shortest',
-            finalName,
+            '-i', clipInputs[0], '-i', safeAudioName,
+            '-map', '0:v:0', '-map', '1:a:0',
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+            '-shortest', finalName,
           ]);
         } else {
           const concatFile = 'concat_list.txt';
           const concatContent = clipInputs.map((name) => `file '${name}'`).join('\n');
           await ffmpeg.writeFile(concatFile, new TextEncoder().encode(concatContent));
           await ffmpeg.exec([
-            '-safe',
-            '0',
-            '-f',
-            'concat',
-            '-i',
-            concatFile,
-            '-i',
-            safeAudio,
-            '-map',
-            '0:v:0',
-            '-map',
-            '1:a:0',
-            '-c:v',
-            'libx264',
-            '-preset',
-            'ultrafast',
-            '-pix_fmt',
-            'yuv420p',
-            '-shortest',
-            finalName,
+            '-safe', '0', '-f', 'concat', '-i', concatFile,
+            '-i', safeAudioName,
+            '-map', '0:v:0', '-map', '1:a:0',
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+            '-shortest', finalName,
           ]);
         }
       } else if (clipInputs.length === 1) {
         await ffmpeg.exec([
-          '-i',
-          clipInputs[0],
-          '-c:v',
-          'libx264',
-          '-preset',
-          'ultrafast',
-          '-pix_fmt',
-          'yuv420p',
+          '-i', clipInputs[0],
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
           finalName,
         ]);
       } else {
@@ -284,18 +294,8 @@ export default function App() {
         const concatContent = clipInputs.map((name) => `file '${name}'`).join('\n');
         await ffmpeg.writeFile(concatFile, new TextEncoder().encode(concatContent));
         await ffmpeg.exec([
-          '-safe',
-          '0',
-          '-f',
-          'concat',
-          '-i',
-          concatFile,
-          '-c:v',
-          'libx264',
-          '-preset',
-          'ultrafast',
-          '-pix_fmt',
-          'yuv420p',
+          '-safe', '0', '-f', 'concat', '-i', concatFile,
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
           finalName,
         ]);
       }
@@ -354,7 +354,14 @@ export default function App() {
           {audioTrack && (
             <div className="audio-box">
               <span>{audioTrack.name}</span>
-              <audio controls src={audioTrack.url} />
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={audioVolume}
+                onChange={(event) => setAudioVolume(Number(event.target.value))}
+              />
+              <audio controls src={audioTrack.url} volume={audioVolume / 100} />
             </div>
           )}
         </div>
@@ -405,8 +412,14 @@ export default function App() {
                 <span>{formatSeconds(activeClip.duration)}</span>
               </div>
 
-              <div className="video-wrap">
+              <div
+                className={`video-wrap transition-${activeClip.transition}`}
+                style={{
+                  transition: activeClip.transition !== 'none' ? 'all 0.35s ease' : 'none',
+                }}
+              >
                 <video
+                  ref={videoRef}
                   key={activeClip.id}
                   src={activeClip.url}
                   controls
@@ -422,6 +435,18 @@ export default function App() {
                     style={{ left: `${overlay.x}%`, top: `${overlay.y}%` }}
                   >
                     {overlay.text}
+                  </div>
+                ))}
+              </div>
+
+              <div className="caption-layer">
+                {captions.map((caption) => (
+                  <div
+                    key={caption.id}
+                    className="caption-bubble"
+                    style={{ left: `${caption.x}%`, top: `${caption.y}%` }}
+                  >
+                    {caption.text}
                   </div>
                 ))}
               </div>
@@ -446,11 +471,7 @@ export default function App() {
                     max={Math.max(activeClip.duration - 1, 1)}
                     step={0.1}
                     value={activeClip.trimStart}
-                    onChange={(event) =>
-                      updateActiveClip({
-                        trimStart: Number(event.target.value),
-                      })
-                    }
+                    onChange={(event) => updateActiveClip({ trimStart: Number(event.target.value) })}
                   />
                 </label>
 
@@ -462,11 +483,7 @@ export default function App() {
                     max={activeClip.duration}
                     step={0.1}
                     value={activeClip.trimEnd}
-                    onChange={(event) =>
-                      updateActiveClip({
-                        trimEnd: Number(event.target.value),
-                      })
-                    }
+                    onChange={(event) => updateActiveClip({ trimEnd: Number(event.target.value) })}
                   />
                 </label>
 
@@ -499,20 +516,61 @@ export default function App() {
                     }}
                     onDragEnd={() => setDraggedClipId(null)}
                     style={{
-                      width: `${Math.max(
-                        ((clip.trimEnd - clip.trimStart) / Math.max(clip.duration, 1)) * 100,
-                        18
-                      )}%`,
+                      width: `${Math.max(((clip.trimEnd - clip.trimStart) / Math.max(clip.duration, 1)) * 100, 18)}%`,
                     }}
                   >
                     <span>{clip.name}</span>
                     <small>
-                      {formatSeconds(clip.trimStart)} → {formatSeconds(clip.trimEnd)}
+                      {clip.transition} • {formatSeconds(clip.trimStart)} → {formatSeconds(clip.trimEnd)}
                     </small>
                   </button>
                 ))
               )}
             </div>
+          </div>
+        </section>
+
+        {activeClip && (
+          <section className="panel extra-panel">
+            <h3>Transitions & audio</h3>
+            <div className="stacked-controls">
+              <div>
+                <label>Transition</label>
+                <div className="chip-row">
+                  {transitionOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      className={activeClip.transition === option.value ? 'chip active' : 'chip'}
+                      onClick={() => updateActiveClip({ transition: option.value })}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label>Clip volume: {activeClip.volume}%</label>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={activeClip.volume}
+                  onChange={(event) => updateActiveClip({ volume: Number(event.target.value) })}
+                />
+              </div>
+            </div>
+          </section>
+        )}
+
+        <section className="panel extra-panel">
+          <h3>Captions</h3>
+          <div className="caption-tools">
+            <input
+              value={captionText}
+              onChange={(event) => setCaptionText(event.target.value)}
+            />
+            <button className="primary-button" onClick={addCaption}>Add caption</button>
           </div>
         </section>
 

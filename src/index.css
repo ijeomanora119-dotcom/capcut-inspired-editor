@@ -220,10 +220,27 @@ input[type='file'] {
 }
 
 .video-wrap {
+  position: relative;
   background: #020817;
   border-radius: 18px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.transition-fade {
+  opacity: 0.88;
+}
+
+.transition-slide {
+  transform: translateX(4px);
+}
+
+.transition-zoom {
+  transform: scale(1.04);
+}
+
+.transition-dissolve {
+  filter: blur(0.5px);
 }
 
 video {
@@ -233,13 +250,15 @@ video {
   background: #020817;
 }
 
-.overlay-layer {
+.overlay-layer,
+.caption-layer {
   position: relative;
   min-height: 60px;
   margin-top: 10px;
 }
 
-.text-overlay {
+.text-overlay,
+.caption-bubble {
   position: absolute;
   transform: translate(-50%, -50%);
   padding: 8px 12px;
@@ -250,6 +269,11 @@ video {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+.caption-bubble {
+  background: rgba(8, 47, 73, 0.76);
+  border-color: rgba(125, 211, 252, 0.9);
 }
 
 .controls-grid {
@@ -294,6 +318,21 @@ video {
   color: #a9bdd8;
 }
 
+.extra-panel {
+  margin-top: 18px;
+}
+
+.stacked-controls {
+  display: grid;
+  gap: 18px;
+}
+
+.caption-tools {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
 .export-status {
   margin-top: 16px;
   padding: 10px 14px;
@@ -312,5 +351,10 @@ video {
   .sidebar {
     border-right: none;
     border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  }
+
+  .caption-tools {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
